@@ -142,27 +142,33 @@ def get_lucidnn_export_json(topology, network_data, activ_func, import_source):
 
     full_network_data = {}
 
-    # Loop through ALL layers except input layer
+    # 🔥 Force initialize ALL neurons
     for l in range(1, len(topology)):
-        prev_layer_size = topology[l-1]
+        prev_layer_size = topology[l - 1]
         curr_layer_size = topology[l]
 
         for n in range(curr_layer_size):
             key = f"L{l}_N{n}"
 
-            # If neuron exists → use it
+            # If already exists → use it
             if key in network_data:
                 weights = list(network_data[key]["weights"])
                 bias = float(network_data[key]["bias"])
 
-                # Fix mismatch (important!)
+                # Fix missing weights length
                 if len(weights) != prev_layer_size:
                     weights = [np.random.uniform(-1, 1) for _ in range(prev_layer_size)]
 
             else:
-                # If missing → initialize properly
+                # 🔥 CREATE missing neuron
                 weights = [np.random.uniform(-1, 1) for _ in range(prev_layer_size)]
                 bias = float(np.random.uniform(-0.5, 0.5))
+
+                # Also store back into session (important)
+                network_data[key] = {
+                    "weights": weights,
+                    "bias": bias
+                }
 
             full_network_data[key] = {
                 "weights": weights,
