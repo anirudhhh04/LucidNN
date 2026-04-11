@@ -185,13 +185,31 @@ with c2:
 with c3:
     n_points = st.slider("Point count", min_value=10, max_value=MAX_POINTS, value=DEFAULT_POINTS)
 
+model_key = model_type.lower().replace(" ", "_").replace("(", "").replace(")", "")
+lr_key = f"reg_lr_{model_key}"
+epochs_key = f"reg_epochs_{model_key}"
+
+pending_update = st.session_state.pop("reg_pending_update", None)
+if pending_update is not None and pending_update.get("model_key") == model_key:
+    st.session_state[lr_key] = float(pending_update["lr"])
+    st.session_state[epochs_key] = int(pending_update["epochs"])
+
+default_lr = 0.12 if model_type == "Logistic Regression" else 0.01
+if lr_key not in st.session_state:
+    st.session_state[lr_key] = default_lr
+if epochs_key not in st.session_state:
+    st.session_state[epochs_key] = DEFAULT_EPOCHS
+
 with st.expander("Training settings", expanded=True):
     if model_type == "Logistic Regression":
-        lr = st.number_input("Learning rate", min_value=0.0001, max_value=1.0, value=0.12, step=0.01, format="%.4f")
+        st.number_input("Learning rate", min_value=0.0001, max_value=1.0, step=0.01, format="%.4f", key=lr_key)
     else:
-        lr = st.number_input("Learning rate", min_value=0.0001, max_value=1.0, value=0.01, step=0.001, format="%.4f")
+        st.number_input("Learning rate", min_value=0.0001, max_value=1.0, step=0.001, format="%.4f", key=lr_key)
 
-    epochs = st.slider("Epochs", min_value=20, max_value=2000, value=DEFAULT_EPOCHS, step=20)
+    st.slider("Epochs", min_value=20, max_value=2000, step=20, key=epochs_key)
+
+lr = float(st.session_state[lr_key])
+epochs = int(st.session_state[epochs_key])
 
 st.markdown("---")
 
@@ -263,88 +281,238 @@ if len(data_df) < 3:
 x = data_df["x"].to_numpy(dtype=float)
 y = data_df["y"].to_numpy(dtype=float)
 
+last_result_key = f"reg_last_result_{model_key}"
 training_requested = st.button("Train selected model", type="primary", use_container_width=True)
+training_requested = training_requested or st.session_state.pop("reg_trigger_retrain", False)
 
 if training_requested:
     with st.spinner("Training in progress..."):
         if model_type == "Linear Regression":
             params, losses = train_linear(x, y, lr, epochs)
-            x_grid = np.linspace(np.min(x), np.max(x), 250)
-            y_pred_grid = params[0] + params[1] * x_grid
-            y_pred_points = params[0] + params[1] * x
-
-            r2_den = np.sum((y - np.mean(y)) ** 2)
-            r2 = 1 - np.sum((y - y_pred_points) ** 2) / (r2_den + 1e-9)
-
-            left, right = st.columns(2)
-            with left:
-                st.subheader("Model fit")
-                curve_df = pd.DataFrame({"x": x_grid, "prediction": y_pred_grid})
-                plot_regression_points_and_curve(data_df, curve_df, "Observed vs fitted line")
-
-            with right:
-                st.subheader("Convergence")
-                plot_convergence(losses, "Loss metric: Mean Squared Error")
-                st.metric("Final MSE", f"{losses[-1]:.6f}")
-                st.metric("R^2", f"{r2:.4f}")
-                st.code(f"y_hat = {params[0]:.4f} + ({params[1]:.4f}) * x", language="text")
+            st.session_state[last_result_key] = {
+                "run_id": int(st.session_state.get("reg_run_id", 0)) + 1,
+                "model_type": model_type,
+                "x": x,
+                "y": y,
+                "data_df": data_df.copy(),
+                "losses": losses,
+                "params": [float(params[0]), float(params[1])],
+            }
 
         elif model_type == "Non-Linear Regression (Ellipse Basis)":
             params, losses, s = train_ellipse_nonlinear(x, y, lr, epochs)
-            x_grid = np.linspace(np.min(x), np.max(x), 250)
-            phi_grid = np.sqrt(np.clip(1 - (x_grid / s) ** 2, 0, None))
-            y_pred_grid = params[0] + params[1] * x_grid + params[2] * phi_grid
-
-            phi_points = np.sqrt(np.clip(1 - (x / s) ** 2, 0, None))
-            y_pred_points = params[0] + params[1] * x + params[2] * phi_points
-            r2_den = np.sum((y - np.mean(y)) ** 2)
-            r2 = 1 - np.sum((y - y_pred_points) ** 2) / (r2_den + 1e-9)
-
-            left, right = st.columns(2)
-            with left:
-                st.subheader("Model fit")
-                curve_df = pd.DataFrame({"x": x_grid, "prediction": y_pred_grid})
-                plot_regression_points_and_curve(data_df, curve_df, "Observed vs ellipse-basis fitted curve")
-
-            with right:
-                st.subheader("Convergence")
-                plot_convergence(losses, "Loss metric: Mean Squared Error")
-                st.metric("Final MSE", f"{losses[-1]:.6f}")
-                st.metric("R^2", f"{r2:.4f}")
-                st.code(
-                    "y_hat = b0 + b1*x + b2*sqrt(max(0, 1 - (x/s)^2))\n"
-                    f"b0={params[0]:.4f}, b1={params[1]:.4f}, b2={params[2]:.4f}, s={s:.4f}",
-                    language="text",
-                )
+            st.session_state[last_result_key] = {
+                "run_id": int(st.session_state.get("reg_run_id", 0)) + 1,
+                "model_type": model_type,
+                "x": x,
+                "y": y,
+                "data_df": data_df.copy(),
+                "losses": losses,
+                "params": [float(params[0]), float(params[1]), float(params[2])],
+                "s": float(s),
+            }
 
         else:
             params, losses = train_logistic(x, y, lr, epochs)
-            x_grid = np.linspace(np.min(x), np.max(x), 250)
-            p_grid = 1 / (1 + np.exp(-(params[0] + params[1] * x_grid)))
-            p_points = 1 / (1 + np.exp(-(params[0] + params[1] * x)))
+            st.session_state[last_result_key] = {
+                "run_id": int(st.session_state.get("reg_run_id", 0)) + 1,
+                "model_type": model_type,
+                "x": x,
+                "y": y,
+                "data_df": data_df.copy(),
+                "losses": losses,
+                "params": [float(params[0]), float(params[1])],
+            }
 
-            preds_cls = (p_points >= 0.5).astype(int)
-            accuracy = float(np.mean(preds_cls == y))
-
-            left, right = st.columns(2)
-            with left:
-                st.subheader("Model fit")
-                curve_df = pd.DataFrame({"x": x_grid, "prediction": p_grid})
-                plot_regression_points_and_curve(data_df, curve_df, "Observed classes (0/1) vs fitted probability")
-
-            with right:
-                st.subheader("Convergence")
-                plot_convergence(losses, "Loss metric: Binary Cross Entropy")
-                st.metric("Final BCE", f"{losses[-1]:.6f}")
-                st.metric("Training Accuracy", f"{accuracy * 100:.2f}%")
-                st.code(
-                    f"p(y=1|x) = sigmoid({params[0]:.4f} + ({params[1]:.4f}) * x)",
-                    language="text",
-                )
+        st.session_state["reg_run_id"] = int(st.session_state.get("reg_run_id", 0)) + 1
 
     st.success("Training complete. Adjust model, data, or hyperparameters and train again.")
 
+result = st.session_state.get(last_result_key)
+
+if result is not None:
+    x_fit = np.asarray(result["x"], dtype=float)
+    y_fit = np.asarray(result["y"], dtype=float)
+    points_df = result["data_df"]
+    losses = result["losses"]
+
+    if model_type == "Linear Regression":
+        trained_c, trained_m = result["params"]
+        curve_init_key = f"curve_init_linear_{model_key}"
+        curve_c_key = f"curve_c_{model_key}"
+        curve_m_key = f"curve_m_{model_key}"
+
+        if st.session_state.get(curve_init_key) != result["run_id"]:
+            st.session_state[curve_c_key] = float(trained_c)
+            st.session_state[curve_m_key] = float(trained_m)
+            st.session_state[curve_init_key] = result["run_id"]
+
+        st.subheader("Output Curve Parameters")
+        p1, p2 = st.columns(2)
+        with p1:
+            st.number_input("c (intercept)", step=0.1, format="%.6f", key=curve_c_key)
+        with p2:
+            st.number_input("m (slope)", step=0.1, format="%.6f", key=curve_m_key)
+
+        c_manual = float(st.session_state[curve_c_key])
+        m_manual = float(st.session_state[curve_m_key])
+
+        x_grid = np.linspace(np.min(x_fit), np.max(x_fit), 250)
+        y_pred_grid = c_manual + m_manual * x_grid
+        y_pred_points = c_manual + m_manual * x_fit
+        mse = float(np.mean((y_fit - y_pred_points) ** 2))
+        r2_den = np.sum((y_fit - np.mean(y_fit)) ** 2)
+        r2 = 1 - np.sum((y_fit - y_pred_points) ** 2) / (r2_den + 1e-9)
+
+        left, right = st.columns(2)
+        with left:
+            st.subheader("Model fit")
+            curve_df = pd.DataFrame({"x": x_grid, "prediction": y_pred_grid})
+            plot_regression_points_and_curve(points_df, curve_df, "Observed vs fitted line")
+
+        with right:
+            st.subheader("Convergence")
+            plot_convergence(losses, "Loss metric: Mean Squared Error")
+            st.metric("Current MSE", f"{mse:.6f}")
+            st.metric("Current R^2", f"{r2:.4f}")
+            st.code(f"y_hat = {c_manual:.4f} + ({m_manual:.4f}) * x", language="text")
+            st.caption(f"Trained defaults: c={trained_c:.4f}, m={trained_m:.4f}")
+
+    elif model_type == "Non-Linear Regression (Ellipse Basis)":
+        trained_b0, trained_b1, trained_b2 = result["params"]
+        trained_s = result["s"]
+
+        curve_init_key = f"curve_init_ellipse_{model_key}"
+        b0_key = f"curve_b0_{model_key}"
+        b1_key = f"curve_b1_{model_key}"
+        b2_key = f"curve_b2_{model_key}"
+        s_key = f"curve_s_{model_key}"
+
+        if st.session_state.get(curve_init_key) != result["run_id"]:
+            st.session_state[b0_key] = float(trained_b0)
+            st.session_state[b1_key] = float(trained_b1)
+            st.session_state[b2_key] = float(trained_b2)
+            st.session_state[s_key] = float(trained_s)
+            st.session_state[curve_init_key] = result["run_id"]
+
+        st.subheader("Output Curve Parameters")
+        p1, p2, p3, p4 = st.columns(4)
+        with p1:
+            st.number_input("b0", step=0.1, format="%.6f", key=b0_key)
+        with p2:
+            st.number_input("b1", step=0.1, format="%.6f", key=b1_key)
+        with p3:
+            st.number_input("b2", step=0.1, format="%.6f", key=b2_key)
+        with p4:
+            st.number_input("s", min_value=0.000001, step=0.1, format="%.6f", key=s_key)
+
+        b0 = float(st.session_state[b0_key])
+        b1 = float(st.session_state[b1_key])
+        b2 = float(st.session_state[b2_key])
+        s = max(float(st.session_state[s_key]), 1e-6)
+
+        x_grid = np.linspace(np.min(x_fit), np.max(x_fit), 250)
+        phi_grid = np.sqrt(np.clip(1 - (x_grid / s) ** 2, 0, None))
+        y_pred_grid = b0 + b1 * x_grid + b2 * phi_grid
+
+        phi_points = np.sqrt(np.clip(1 - (x_fit / s) ** 2, 0, None))
+        y_pred_points = b0 + b1 * x_fit + b2 * phi_points
+        mse = float(np.mean((y_fit - y_pred_points) ** 2))
+        r2_den = np.sum((y_fit - np.mean(y_fit)) ** 2)
+        r2 = 1 - np.sum((y_fit - y_pred_points) ** 2) / (r2_den + 1e-9)
+
+        left, right = st.columns(2)
+        with left:
+            st.subheader("Model fit")
+            curve_df = pd.DataFrame({"x": x_grid, "prediction": y_pred_grid})
+            plot_regression_points_and_curve(points_df, curve_df, "Observed vs ellipse-basis fitted curve")
+
+        with right:
+            st.subheader("Convergence")
+            plot_convergence(losses, "Loss metric: Mean Squared Error")
+            st.metric("Current MSE", f"{mse:.6f}")
+            st.metric("Current R^2", f"{r2:.4f}")
+            st.code(
+                "y_hat = b0 + b1*x + b2*sqrt(max(0, 1 - (x/s)^2))\n"
+                f"b0={b0:.4f}, b1={b1:.4f}, b2={b2:.4f}, s={s:.4f}",
+                language="text",
+            )
+            st.caption(
+                f"Trained defaults: b0={trained_b0:.4f}, b1={trained_b1:.4f}, "
+                f"b2={trained_b2:.4f}, s={trained_s:.4f}"
+            )
+
+    else:
+        w0, w1 = result["params"]
+        x_grid = np.linspace(np.min(x_fit), np.max(x_fit), 250)
+        p_grid = 1 / (1 + np.exp(-(w0 + w1 * x_grid)))
+        p_points = 1 / (1 + np.exp(-(w0 + w1 * x_fit)))
+
+        preds_cls = (p_points >= 0.5).astype(int)
+        accuracy = float(np.mean(preds_cls == y_fit))
+
+        left, right = st.columns(2)
+        with left:
+            st.subheader("Model fit")
+            curve_df = pd.DataFrame({"x": x_grid, "prediction": p_grid})
+            plot_regression_points_and_curve(points_df, curve_df, "Observed classes (0/1) vs fitted probability")
+
+        with right:
+            st.subheader("Convergence")
+            plot_convergence(losses, "Loss metric: Binary Cross Entropy")
+            st.metric("Final BCE", f"{losses[-1]:.6f}")
+            st.metric("Training Accuracy", f"{accuracy * 100:.2f}%")
+            st.code(
+                f"p(y=1|x) = sigmoid({w0:.4f} + ({w1:.4f}) * x)",
+                language="text",
+            )
+
 st.markdown("---")
+
+st.subheader("Hyperparameters (Quick Edit)")
+st.caption("Edit at the bottom and retrain immediately without scrolling back up.")
+
+quick_lr_key = f"quick_lr_{model_key}"
+quick_epochs_key = f"quick_epochs_{model_key}"
+
+if st.session_state.get(quick_lr_key) != st.session_state[lr_key]:
+    st.session_state[quick_lr_key] = float(st.session_state[lr_key])
+if st.session_state.get(quick_epochs_key) != st.session_state[epochs_key]:
+    st.session_state[quick_epochs_key] = int(st.session_state[epochs_key])
+
+with st.form(f"retrain_form_{model_key}"):
+    if model_type == "Logistic Regression":
+        st.number_input(
+            "Learning rate (quick edit)",
+            min_value=0.0001,
+            max_value=1.0,
+            step=0.01,
+            format="%.4f",
+            key=quick_lr_key,
+        )
+    else:
+        st.number_input(
+            "Learning rate (quick edit)",
+            min_value=0.0001,
+            max_value=1.0,
+            step=0.001,
+            format="%.4f",
+            key=quick_lr_key,
+        )
+
+    st.slider("Epochs (quick edit)", min_value=20, max_value=2000, step=20, key=quick_epochs_key)
+
+    quick_retrain = st.form_submit_button("Apply Changes and Train Again", type="primary", use_container_width=True)
+
+if quick_retrain:
+    st.session_state["reg_pending_update"] = {
+        "model_key": model_key,
+        "lr": float(st.session_state[quick_lr_key]),
+        "epochs": int(st.session_state[quick_epochs_key]),
+    }
+    st.session_state["reg_trigger_retrain"] = True
+    st.rerun()
+
 st.caption(
     "Tip: Start with default data to understand behavior, then switch to custom data and paste your own points."
 )
