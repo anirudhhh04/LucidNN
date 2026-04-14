@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import altair as alt
+import time
 
 st.set_page_config(page_title="Regression Lab", page_icon="📈", layout="wide")
 
@@ -43,6 +44,7 @@ def make_logistic_data(n: int) -> pd.DataFrame:
 def train_linear(x: np.ndarray, y: np.ndarray, lr: float, epochs: int):
     params = np.zeros(2, dtype=float)  # b0, b1
     losses = []
+    params_history = [params.copy()]
 
     for _ in range(epochs):
         pred = params[0] + params[1] * x
@@ -55,8 +57,9 @@ def train_linear(x: np.ndarray, y: np.ndarray, lr: float, epochs: int):
         params[0] -= lr * grad_b0
         params[1] -= lr * grad_b1
         losses.append(loss)
+        params_history.append(params.copy())
 
-    return params, losses
+    return params, losses, params_history
 
 
 def train_ellipse_nonlinear(x: np.ndarray, y: np.ndarray, lr: float, epochs: int):
@@ -64,6 +67,7 @@ def train_ellipse_nonlinear(x: np.ndarray, y: np.ndarray, lr: float, epochs: int
     s = max(float(np.max(np.abs(x))), 1e-6)
     params = np.zeros(3, dtype=float)  # b0, b1, b2
     losses = []
+    params_history = [params.copy()]
 
     for _ in range(epochs):
         phi = np.sqrt(np.clip(1 - (x / s) ** 2, 0, None))
@@ -79,13 +83,15 @@ def train_ellipse_nonlinear(x: np.ndarray, y: np.ndarray, lr: float, epochs: int
         params[1] -= lr * grad_b1
         params[2] -= lr * grad_b2
         losses.append(loss)
+        params_history.append(params.copy())
 
-    return params, losses, s
+    return params, losses, s, params_history
 
 
 def train_logistic(x: np.ndarray, y: np.ndarray, lr: float, epochs: int):
     params = np.zeros(2, dtype=float)  # w0, w1
     losses = []
+    params_history = [params.copy()]
     eps = 1e-9
 
     for _ in range(epochs):
@@ -100,8 +106,9 @@ def train_logistic(x: np.ndarray, y: np.ndarray, lr: float, epochs: int):
         params[0] -= lr * grad_w0
         params[1] -= lr * grad_w1
         losses.append(loss)
+        params_history.append(params.copy())
 
-    return params, losses
+    return params, losses, params_history
 
 
 # -----------------------------
@@ -155,6 +162,155 @@ def plot_convergence(losses: list[float], metric_name: str):
     loss_df = pd.DataFrame({"epoch": np.arange(1, len(losses) + 1), "loss": losses})
     st.line_chart(loss_df, x="epoch", y="loss", height=260)
     st.caption(metric_name)
+
+
+def render_stage_controls(stage_count: int, key_prefix: str):
+    stage_key = f"{key_prefix}_stage"
+    play_key = f"{key_prefix}_play"
+    speed_key = f"{key_prefix}_speed_ms"
+    progress_key = f"{key_prefix}_progress"
+    step_key = f"{key_prefix}_step"
+
+    if stage_key not in st.session_state:
+        st.session_state[stage_key] = stage_count
+    else:
+        st.session_state[stage_key] = max(0, min(int(st.session_state[stage_key]), stage_count))
+
+    if play_key not in st.session_state:
+        st.session_state[play_key] = False
+    if speed_key not in st.session_state:
+        st.session_state[speed_key] = 90
+    if progress_key not in st.session_state:
+        st.session_state[progress_key] = float(st.session_state[stage_key])
+    if step_key not in st.session_state:
+        st.session_state[step_key] = 0.2
+
+    stage = int(st.session_state[stage_key])
+    is_playing = bool(st.session_state[play_key])
+    animated_step_happened = False
+    st.session_state[progress_key] = max(0.0, min(float(st.session_state[progress_key]), float(stage_count)))
+
+    # Advance one frame per rerun while playing.
+    if is_playing:
+        if float(st.session_state[progress_key]) < float(stage_count):
+            st.session_state[progress_key] = min(
+                float(stage_count),
+                float(st.session_state[progress_key]) + float(st.session_state[step_key]),
+            )
+            st.session_state[stage_key] = int(round(float(st.session_state[progress_key])))
+            stage = int(st.session_state[stage_key])
+            animated_step_happened = True
+        else:
+            st.session_state[play_key] = False
+            is_playing = False
+    else:
+        # Keep visual progress aligned with manual stage when not animating.
+        st.session_state[progress_key] = float(stage)
+
+    st.markdown("### Training stage replay")
+    st.caption("Move the slider to view how the curve transforms from epoch 0 to the final epoch.")
+
+    manual_change = False
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        if st.button("Previous", use_container_width=True, key=f"{key_prefix}_prev"):
+            st.session_state[stage_key] = max(0, stage - 1)
+            st.session_state[progress_key] = float(st.session_state[stage_key])
+            st.session_state[play_key] = False
+            manual_change = True
+    with c2:
+        if st.button("Next", use_container_width=True, key=f"{key_prefix}_next"):
+            st.session_state[stage_key] = min(stage_count, stage + 1)
+            st.session_state[progress_key] = float(st.session_state[stage_key])
+            st.session_state[play_key] = False
+            manual_change = True
+    with c3:
+        toggle_label = "Stop Show" if is_playing else "Show"
+        if st.button(toggle_label, use_container_width=True, key=f"{key_prefix}_show"):
+            if is_playing:
+                st.session_state[play_key] = False
+            else:
+                if float(st.session_state[progress_key]) >= float(stage_count):
+                    st.session_state[progress_key] = 0.0
+                    st.session_state[stage_key] = 0
+                st.session_state[play_key] = True
+            manual_change = True
+    with c4:
+        if st.button("Jump to final", use_container_width=True, key=f"{key_prefix}_final"):
+            st.session_state[stage_key] = stage_count
+            st.session_state[progress_key] = float(stage_count)
+            st.session_state[play_key] = False
+            manual_change = True
+
+    s1, s2 = st.columns(2)
+    with s1:
+        st.slider(
+            "Animation delay (ms)",
+            min_value=30,
+            max_value=400,
+            step=10,
+            key=speed_key,
+        )
+    with s2:
+        st.slider(
+            "Smoothness (epoch step/frame)",
+            min_value=0.05,
+            max_value=1.0,
+            step=0.05,
+            key=step_key,
+        )
+
+    st.caption("Show/Stop toggles playback. Smaller step + lower delay gives smoother transition.")
+
+    slider_stage = st.slider(
+        "Training epoch stage",
+        min_value=0,
+        max_value=stage_count,
+        key=stage_key,
+    )
+
+    if slider_stage != stage and not is_playing:
+        st.session_state[progress_key] = float(slider_stage)
+
+    if manual_change:
+        st.rerun()
+
+    if animated_step_happened:
+        time.sleep(max(int(st.session_state[speed_key]), 30) / 1000.0)
+        st.rerun()
+
+    return float(st.session_state[progress_key]), int(st.session_state[stage_key])
+
+
+def interpolate_stage_params(params_history: list[list[float]], stage_progress: float):
+    if not params_history:
+        return None
+
+    max_stage = len(params_history) - 1
+    progress = max(0.0, min(float(stage_progress), float(max_stage)))
+    low = int(np.floor(progress))
+    high = min(max_stage, low + 1)
+    alpha = progress - low
+
+    p0 = np.asarray(params_history[low], dtype=float)
+    p1 = np.asarray(params_history[high], dtype=float)
+    return p0 + alpha * (p1 - p0)
+
+
+def interpolate_stage_loss(losses: list[float], stage_progress: float):
+    if not losses or stage_progress <= 0:
+        return None
+
+    max_epoch = len(losses)
+    epoch_pos = max(1.0, min(float(stage_progress), float(max_epoch)))
+    low = int(np.floor(epoch_pos))
+    high = min(max_epoch, low + 1)
+    alpha = epoch_pos - low
+
+    l0 = float(losses[low - 1])
+    l1 = float(losses[high - 1])
+    return l0 + alpha * (l1 - l0)
 
 
 # -----------------------------
@@ -288,7 +444,7 @@ training_requested = training_requested or st.session_state.pop("reg_trigger_ret
 if training_requested:
     with st.spinner("Training in progress..."):
         if model_type == "Linear Regression":
-            params, losses = train_linear(x, y, lr, epochs)
+            params, losses, params_history = train_linear(x, y, lr, epochs)
             st.session_state[last_result_key] = {
                 "run_id": int(st.session_state.get("reg_run_id", 0)) + 1,
                 "model_type": model_type,
@@ -297,10 +453,11 @@ if training_requested:
                 "data_df": data_df.copy(),
                 "losses": losses,
                 "params": [float(params[0]), float(params[1])],
+                "params_history": [p.tolist() for p in params_history],
             }
 
         elif model_type == "Non-Linear Regression (Ellipse Basis)":
-            params, losses, s = train_ellipse_nonlinear(x, y, lr, epochs)
+            params, losses, s, params_history = train_ellipse_nonlinear(x, y, lr, epochs)
             st.session_state[last_result_key] = {
                 "run_id": int(st.session_state.get("reg_run_id", 0)) + 1,
                 "model_type": model_type,
@@ -310,10 +467,11 @@ if training_requested:
                 "losses": losses,
                 "params": [float(params[0]), float(params[1]), float(params[2])],
                 "s": float(s),
+                "params_history": [p.tolist() for p in params_history],
             }
 
         else:
-            params, losses = train_logistic(x, y, lr, epochs)
+            params, losses, params_history = train_logistic(x, y, lr, epochs)
             st.session_state[last_result_key] = {
                 "run_id": int(st.session_state.get("reg_run_id", 0)) + 1,
                 "model_type": model_type,
@@ -322,6 +480,7 @@ if training_requested:
                 "data_df": data_df.copy(),
                 "losses": losses,
                 "params": [float(params[0]), float(params[1])],
+                "params_history": [p.tolist() for p in params_history],
             }
 
         st.session_state["reg_run_id"] = int(st.session_state.get("reg_run_id", 0)) + 1
@@ -335,6 +494,24 @@ if result is not None:
     y_fit = np.asarray(result["y"], dtype=float)
     points_df = result["data_df"]
     losses = result["losses"]
+    params_history = result.get("params_history", [])
+    stage_count = max(len(params_history) - 1, 0)
+    stage_key_prefix = f"reg_stage_{model_key}_{result['run_id']}"
+    stage_key = f"{stage_key_prefix}_stage"
+    progress_key = f"{stage_key_prefix}_progress"
+    if stage_key not in st.session_state:
+        st.session_state[stage_key] = stage_count
+    else:
+        st.session_state[stage_key] = max(0, min(int(st.session_state[stage_key]), stage_count))
+    if progress_key not in st.session_state:
+        st.session_state[progress_key] = float(st.session_state[stage_key])
+    else:
+        st.session_state[progress_key] = max(0.0, min(float(st.session_state[progress_key]), float(stage_count)))
+
+    selected_stage = int(st.session_state[stage_key])
+    stage_progress = float(st.session_state[progress_key])
+    stage_params = interpolate_stage_params(params_history, stage_progress)
+    stage_loss = interpolate_stage_loss(losses, stage_progress)
 
     if model_type == "Linear Regression":
         trained_c, trained_m = result["params"]
@@ -357,6 +534,10 @@ if result is not None:
         c_manual = float(st.session_state[curve_c_key])
         m_manual = float(st.session_state[curve_m_key])
 
+        if stage_params is not None:
+            c_manual = float(stage_params[0])
+            m_manual = float(stage_params[1])
+
         x_grid = np.linspace(np.min(x_fit), np.max(x_fit), 250)
         y_pred_grid = c_manual + m_manual * x_grid
         y_pred_points = c_manual + m_manual * x_fit
@@ -369,10 +550,14 @@ if result is not None:
             st.subheader("Model fit")
             curve_df = pd.DataFrame({"x": x_grid, "prediction": y_pred_grid})
             plot_regression_points_and_curve(points_df, curve_df, "Observed vs fitted line")
+            render_stage_controls(stage_count, stage_key_prefix)
 
         with right:
             st.subheader("Convergence")
             plot_convergence(losses, "Loss metric: Mean Squared Error")
+            st.metric("Replay Stage", f"Epoch {stage_progress:.2f}/{stage_count}")
+            if stage_loss is not None:
+                st.metric("Replay Stage MSE", f"{stage_loss:.6f}")
             st.metric("Current MSE", f"{mse:.6f}")
             st.metric("Current R^2", f"{r2:.4f}")
             st.code(f"y_hat = {c_manual:.4f} + ({m_manual:.4f}) * x", language="text")
@@ -411,6 +596,11 @@ if result is not None:
         b2 = float(st.session_state[b2_key])
         s = max(float(st.session_state[s_key]), 1e-6)
 
+        if stage_params is not None:
+            b0 = float(stage_params[0])
+            b1 = float(stage_params[1])
+            b2 = float(stage_params[2])
+
         x_grid = np.linspace(np.min(x_fit), np.max(x_fit), 250)
         phi_grid = np.sqrt(np.clip(1 - (x_grid / s) ** 2, 0, None))
         y_pred_grid = b0 + b1 * x_grid + b2 * phi_grid
@@ -426,10 +616,14 @@ if result is not None:
             st.subheader("Model fit")
             curve_df = pd.DataFrame({"x": x_grid, "prediction": y_pred_grid})
             plot_regression_points_and_curve(points_df, curve_df, "Observed vs ellipse-basis fitted curve")
+            render_stage_controls(stage_count, stage_key_prefix)
 
         with right:
             st.subheader("Convergence")
             plot_convergence(losses, "Loss metric: Mean Squared Error")
+            st.metric("Replay Stage", f"Epoch {stage_progress:.2f}/{stage_count}")
+            if stage_loss is not None:
+                st.metric("Replay Stage MSE", f"{stage_loss:.6f}")
             st.metric("Current MSE", f"{mse:.6f}")
             st.metric("Current R^2", f"{r2:.4f}")
             st.code(
@@ -444,6 +638,9 @@ if result is not None:
 
     else:
         w0, w1 = result["params"]
+        if stage_params is not None:
+            w0 = float(stage_params[0])
+            w1 = float(stage_params[1])
         x_grid = np.linspace(np.min(x_fit), np.max(x_fit), 250)
         p_grid = 1 / (1 + np.exp(-(w0 + w1 * x_grid)))
         p_points = 1 / (1 + np.exp(-(w0 + w1 * x_fit)))
@@ -456,10 +653,14 @@ if result is not None:
             st.subheader("Model fit")
             curve_df = pd.DataFrame({"x": x_grid, "prediction": p_grid})
             plot_regression_points_and_curve(points_df, curve_df, "Observed classes (0/1) vs fitted probability")
+            render_stage_controls(stage_count, stage_key_prefix)
 
         with right:
             st.subheader("Convergence")
             plot_convergence(losses, "Loss metric: Binary Cross Entropy")
+            st.metric("Replay Stage", f"Epoch {stage_progress:.2f}/{stage_count}")
+            if stage_loss is not None:
+                st.metric("Replay Stage BCE", f"{stage_loss:.6f}")
             st.metric("Final BCE", f"{losses[-1]:.6f}")
             st.metric("Training Accuracy", f"{accuracy * 100:.2f}%")
             st.code(
