@@ -34,6 +34,6 @@ The application is designed as an educational tool for understanding neural netw
 
 
 
-## 🌐 Live Demo
+## Live Demo
 
 > https://appapppyappurloptionallucidnn-qxjpa9axk2t8jrerezy24dappappdoma.streamlit.app/
