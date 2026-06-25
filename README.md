@@ -13,7 +13,6 @@ The application is designed as an educational tool for understanding neural netw
 * View layer-wise network statistics
 * Simulate neural network training
 * Monitor error reduction across epochs
-* Compare predicted vs expected outputs
 * Perform weight pruning using configurable thresholds
 * Import pretrained models
 
